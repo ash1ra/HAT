@@ -1,0 +1,7 @@
+[project]
+name = "hat"
+version = "0.1.0"
+description = "HAT (Hybrid Attention Transformer) for SISR (Single Image Super-Resolution) task using PyTorch"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
