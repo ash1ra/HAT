@@ -4,4 +4,20 @@ version = "0.1.0"
 description = "HAT (Hybrid Attention Transformer) for SISR (Single Image Super-Resolution) task using PyTorch"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "einops>=0.8.2",
+    "safetensors>=0.7.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "tqdm>=4.67.3",
+    "wandb>=0.24.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.ruff]
+line-length = 120
+
