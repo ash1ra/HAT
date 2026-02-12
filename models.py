@@ -509,6 +509,8 @@ class HAT(nn.Module):
 
         self.register_buffer("imgs_mean", self.mean)
 
+        self.apply(self._init_weights)
+
     def _calculate_rpi_sa(self) -> Tensor:
         coords_h = torch.arange(self.window_size)
         coords_w = torch.arange(self.window_size)
@@ -554,6 +556,15 @@ class HAT(nn.Module):
 
         return relative_position_index
 
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, std=0.02)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.constant_(module.weight, 1.0)
+            nn.init.constant_(module.bias, 0)
+
     def _calculate_attention_mask(self, x_size: tuple[int, int]) -> Tensor:
         img_height, img_width = x_size
         img_mask = torch.zeros((1, img_height, img_width, 1))
@@ -587,8 +598,22 @@ class HAT(nn.Module):
 
         return attention_mask
 
+    def _add_padding(self, x: Tensor) -> Tensor:
+        _, _, img_height, img_width = x.shape
+
+        mod_pad_height = (self.window_size - img_height % self.window_size) % self.window_size
+        mod_pad_width = (self.window_size - img_width % self.window_size) % self.window_size
+
+        if mod_pad_height != 0 or mod_pad_width != 0:
+            x = F.pad(x, (0, mod_pad_width, 0, mod_pad_height), "reflect")
+
+        return x
+
     def forward(self, x: Tensor) -> Tensor:
         batch_size, num_channels, img_height, img_width = x.shape
+
+        x = self._add_padding(x)
+        _, _, padded_img_height, padded_img_width = x.shape
 
         self.imgs_mean = self.imgs_mean.type_as(x)
         x -= self.imgs_mean
@@ -598,19 +623,19 @@ class HAT(nn.Module):
 
         x = x.flatten(2).transpose(1, 2)
 
-        attention_mask = self._calculate_attention_mask((img_height, img_width))
+        attention_mask = self._calculate_attention_mask((padded_img_height, padded_img_width))
         attention_mask = attention_mask.type_as(x)
 
         for layer in self.deep_feature_extraction:
             x = layer(
                 x,
-                (img_height, img_width),
+                (padded_img_height, padded_img_width),
                 self.rpi_sa,
                 self.rpi_oca,
                 attention_mask,
             )
 
-        x = x.transpose(1, 2).view(batch_size, self.num_channels, img_height, img_width)
+        x = x.transpose(1, 2).view(batch_size, self.num_channels, padded_img_height, padded_img_width)
 
         x = self.conv_after_dfe(x) + x_after_sfe
 
