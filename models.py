@@ -88,48 +88,52 @@ class WMSA(nn.Module):
     def forward(self, x: Tensor, rpi_sa: Tensor, attention_mask: Optional[Tensor] = None) -> Tensor:
         num_windows, num_pixels_in_window, num_channels = x.shape
 
-        qkv_tensor = (
-            self.qkv_layer(x)
-            .reshape(
-                num_windows,
-                num_pixels_in_window,
-                3,
-                self.num_heads,
-                num_channels // self.num_heads,
-            )
-            .permute(2, 0, 3, 1, 4)
+        qkv_tensor = rearrange(
+            self.qkv_layer(x),
+            "nw np (qkv heads d) -> qkv nw heads np d",
+            qkv=3,
+            heads=self.num_heads,
         )
+
         queries, keys, values = qkv_tensor[0], qkv_tensor[1], qkv_tensor[2]
 
         queries *= self.scale
         attention_scores = queries @ keys.transpose(-2, -1)
 
-        relative_position_bias = (
-            self.relative_position_bias_table[rpi_sa.flatten()]
-            .view(num_pixels_in_window, num_pixels_in_window, -1)
-            .permute(2, 0, 1)
-            .contiguous()
-            .unsqueeze_(0)
+        relative_position_bias = rearrange(
+            self.relative_position_bias_table[rpi_sa],
+            "np1 np2 heads -> 1 heads np1 np2",
         )
 
         attention_scores += relative_position_bias
 
         if attention_mask is not None:
-            num_windows_per_img = attention_mask.shape[0]
+            nw_img = attention_mask.shape[0]
 
-            attention_scores = attention_scores.view(
-                num_windows // num_windows_per_img,
-                num_windows_per_img,
-                self.num_heads,
-                num_pixels_in_window,
-                num_pixels_in_window,
+            attention_scores = rearrange(
+                attention_scores,
+                "(b nw_img) heads np1 np2 -> b nw_img heads np1 np2",
+                nw_img=nw_img,
             )
-            attention_scores += attention_mask.unsqueeze(1).unsqueeze(0)
-            attention_scores = attention_scores.view(-1, self.num_heads, num_pixels_in_window, num_pixels_in_window)
+
+            attention_scores += rearrange(
+                attention_mask,
+                "nw_img np1 np2 -> 1 nw_img 1 np1 np2",
+                nw_img=nw_img,
+            )
+
+            attention_scores = rearrange(
+                attention_scores,
+                "b nw_img heads np1 np2 -> (b nw_img) heads np1 np2",
+            )
 
         attention_probs = F.softmax(attention_scores, dim=-1)
 
-        x = (attention_probs @ values).transpose(1, 2).reshape(num_windows, num_pixels_in_window, num_channels)
+        x = rearrange(
+            attention_probs @ values,
+            "nw heads np d -> nw np (heads d)",
+        )
+
         x = self.projection(x)
 
         return x
@@ -206,11 +210,12 @@ class HAB(nn.Module):
         residual = x
 
         x = self.layer_norm_1(x)
-        x = x.view(batch_size, img_height, img_width, num_channels)
 
-        x_cab = x.permute(0, 3, 1, 2)
+        x = rearrange(x, "b (h w) c -> b h w c", h=img_height, w=img_width)
+
+        x_cab = rearrange(x, "b h w c -> b c h w")
         x_cab = self.cab(x_cab)
-        x_cab = x_cab.permute(0, 2, 3, 1).reshape(batch_size, img_height * img_width, num_channels)
+        x_cab = rearrange(x_cab, "b c h w -> b (h w) c")
 
         if self.shift_size > 0:
             x_shifted = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
@@ -219,11 +224,11 @@ class HAB(nn.Module):
             attention_mask = None  # type: ignore
 
         x_windows = split_img_into_windows(img_tensor=x_shifted, window_size=self.window_size)
-        x_windows = x_windows.view(-1, self.window_size * self.window_size, num_channels)
+        x_windows = rearrange(x_windows, "np ws_h ws_w c -> np (ws_h ws_w) c")
 
         attention_windows = self.wmsa(x_windows, rpi_sa=rpi_sa, attention_mask=attention_mask)
+        attention_windows = rearrange(attention_windows, "np (ws_h ws_w) c -> np ws_h ws_w c", ws_h=self.window_size)
 
-        attention_windows = attention_windows.view(-1, self.window_size, self.window_size, num_channels)
         x_shifted = combine_windows_into_img(
             windows_tensor=attention_windows, img_height=img_height, img_width=img_width
         )
@@ -233,7 +238,7 @@ class HAB(nn.Module):
         else:
             x_wmsa = x_shifted
 
-        x_wmsa = x_wmsa.view(batch_size, img_height * img_width, num_channels)
+        x_wmsa = rearrange(x_wmsa, "b h w c -> b (h w) c")
 
         x = x_wmsa + self.alpha * x_cab + residual
         x = self.mlp(self.layer_norm_2(x)) + x
@@ -247,14 +252,14 @@ class OCAB(nn.Module):
         num_channels: int,
         num_heads: int,
         window_size: int,
-        overlap_ratio: int | float,
+        oca_ratio: int | float,
         mlp_ratio: float | int,
     ) -> None:
         super().__init__()
 
         self.num_channels = num_channels
         self.window_size = window_size
-        self.overlapped_window_size = int(window_size * overlap_ratio) + window_size
+        self.overlapped_window_size = int(window_size * oca_ratio) + window_size
         self.num_heads = num_heads
 
         self.scale = (num_channels // num_heads) ** -0.5
@@ -289,56 +294,62 @@ class OCAB(nn.Module):
 
     def forward(self, x: Tensor, x_size: tuple[int, int], rpi_oca: Tensor) -> Tensor:
         img_height, img_width = x_size
-        batch_size, num_pixels_in_window, num_channels = x.shape
+        batch_size, num_pixels_in_img, num_channels = x.shape
 
         residual = x
 
         x = self.layer_norm_1(x)
-        x = x.view(batch_size, img_height, img_width, num_channels)
+        x = rearrange(x, "b (h w) c -> b h w c", h=img_height, w=img_width)
 
-        qkv = self.qkv_layer(x).reshape(batch_size, img_height, img_width, 3, num_channels).permute(3, 0, 4, 1, 2)
-        queries = qkv[0].permute(0, 2, 3, 1)
-        keys_values = torch.cat((qkv[1], qkv[2]), dim=1)
+        qkv = rearrange(
+            self.qkv_layer(x),
+            "b h w (qkv c) -> qkv b c h w",
+            qkv=3,
+        )
+
+        queries = rearrange(qkv[0], "b c h w -> b h w c")
+        keys_values = rearrange(qkv[1:3], "kv b c h w -> b (kv c) h w")
 
         q_windows = split_img_into_windows(img_tensor=queries, window_size=self.window_size)
-        q_windows = q_windows.view(-1, self.window_size * self.window_size, num_channels)
+        q_windows = rearrange(q_windows, "nw ws_h ws_w c -> nw (ws_h ws_w) c")
 
         kv_windows = self.unfold(keys_values)
         kv_windows = rearrange(
             kv_windows,
-            "b (nc ch owh oww) nw -> nc (b nw) (owh oww) ch",
-            nc=2,
-            ch=num_channels,
-            owh=self.overlapped_window_size,
-            oww=self.overlapped_window_size,
-        ).contiguous()
+            "b (kv c ows_h ows_w) nw -> kv (b nw) (ows_h ows_w) c",
+            kv=2,
+            c=num_channels,
+            ows_h=self.overlapped_window_size,
+            ows_w=self.overlapped_window_size,
+        )
         k_windows, v_windows = kv_windows[0], kv_windows[1]
 
-        b_, nq, _ = q_windows.shape
-        _, n, _ = k_windows.shape
-        d = self.num_channels // self.num_heads
-
-        queries = q_windows.reshape(b_, nq, self.num_heads, d).permute(0, 2, 1, 3)
-        keys = k_windows.reshape(b_, n, self.num_heads, d).permute(0, 2, 1, 3)
-        values = v_windows.reshape(b_, n, self.num_heads, d).permute(0, 2, 1, 3)
+        queries = rearrange(q_windows, "nw np (heads d) -> nw heads np d", heads=self.num_heads)
+        keys = rearrange(k_windows, "nw np (heads d) -> nw heads np d", heads=self.num_heads)
+        values = rearrange(v_windows, "nw np (heads d) -> nw heads np d", heads=self.num_heads)
 
         queries *= self.scale
-        attention = queries @ keys.transpose(-2, -1)
+        attention_scores = queries @ keys.transpose(-2, -1)
 
-        relative_position_bias = self.relative_position_bias_table[rpi_oca.view(-1)].view(
-            self.window_size * self.window_size, self.overlapped_window_size * self.overlapped_window_size, -1
+        relative_position_bias = rearrange(
+            self.relative_position_bias_table[rpi_oca.view(-1)],
+            "(np_q np_kv) heads -> 1 heads np_q np_kv",
+            np_q=self.window_size**2,
+            np_kv=self.overlapped_window_size**2,
         )
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
 
-        attention += relative_position_bias.unsqueeze(0)
+        attention_scores += relative_position_bias
 
-        attention = self.softmax(attention)
-        attention_windows = (attention @ values).transpose(1, 2).reshape(b_, nq, self.num_channels)
+        attention_probs = self.softmax(attention_scores)
 
-        attention_windows = attention_windows.view(-1, self.window_size, self.window_size, self.num_channels)
+        attention_windows = rearrange(
+            attention_probs @ values,
+            "nw heads (ws_h ws_w) d -> nw ws_h ws_w (heads d)",
+            ws_h=self.window_size,
+        )
 
         x = combine_windows_into_img(windows_tensor=attention_windows, img_height=img_height, img_width=img_width)
-        x = x.view(batch_size, img_height * img_width, self.num_channels)
+        x = rearrange(x, "b h w c -> b (h w) c")
 
         x = self.projection(x) + residual
         x = x + self.mlp(self.layer_norm_2(x))
@@ -358,7 +369,7 @@ class RHAG(nn.Module):
         alpha: float,
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
-        overlap_ratio: float | int,
+        oca_ratio: float | int,
     ) -> None:
         super().__init__()
 
@@ -383,7 +394,7 @@ class RHAG(nn.Module):
             num_channels=num_channels,
             num_heads=num_heads,
             window_size=window_size,
-            overlap_ratio=overlap_ratio,
+            oca_ratio=oca_ratio,
             mlp_ratio=mlp_ratio,
         )
 
@@ -413,9 +424,9 @@ class RHAG(nn.Module):
 
         x = self.ocab(x, x_size, rpi_oca)
 
-        x = x.transpose(1, 2).view(batch_size, num_channels, img_height, img_width)
+        x = rearrange(x, "b (h w) c -> b c h w", h=img_height, w=img_width)
         x = self.conv(x)
-        x = x.flatten(2).transpose(1, 2)
+        x = rearrange(x, "b c h w -> b (h w) c")
         x += residual
 
         return x
@@ -436,14 +447,13 @@ class HAT(nn.Module):
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
         overlap_ratio: float | int,
-        oca_overlap_ratio: float | int,
+        oca_ratio: float | int,
         scaling_factor: int,
     ) -> None:
         super().__init__()
 
-        self.num_channels = num_channels
         self.window_size = window_size
-        self.oca_overlap_ratio = oca_overlap_ratio
+        self.oca_ratio = oca_ratio
         self.scaling_factor = scaling_factor
 
         self.shallow_feature_extraction = nn.Conv2d(
@@ -466,7 +476,7 @@ class HAT(nn.Module):
                     alpha=alpha,
                     train_img_size=train_img_size,
                     mlp_ratio=mlp_ratio,
-                    overlap_ratio=overlap_ratio,
+                    oca_ratio=oca_ratio,
                 )
                 for i in range(num_rhag_blocks)
             ]
@@ -516,45 +526,43 @@ class HAT(nn.Module):
         coords_w = torch.arange(self.window_size)
 
         coords = torch.stack(torch.meshgrid([coords_h, coords_w], indexing="ij"))
-        coords_flatten = torch.flatten(coords, 1)
+        coords_flatten = rearrange(coords, "c h w -> c (h w)")
 
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords = rearrange(relative_coords, "c np1 np2 -> np1 np2 c")
 
         relative_coords[:, :, 0] += self.window_size - 1
         relative_coords[:, :, 1] += self.window_size - 1
 
         relative_coords[:, :, 0] *= 2 * self.window_size - 1
-        relative_position_index = relative_coords.sum(-1)
 
-        return relative_position_index
+        return relative_coords.sum(-1)
 
     def _calculate_rpi_oca(self) -> Tensor:
         window_size_original = self.window_size
-        window_size_overlapped = self.window_size + int(self.oca_overlap_ratio * self.window_size)
+        window_size_overlapped = self.window_size + int(self.oca_ratio * self.window_size)
 
-        coords_h = torch.arange(window_size_original)
-        coords_w = torch.arange(window_size_original)
+        coords_original_h = torch.arange(window_size_original)
+        coords_original_w = torch.arange(window_size_original)
 
-        coords_original = torch.stack(torch.meshgrid([coords_h, coords_w], indexing="ij"))
-        coords_original_flatten = torch.flatten(coords_original, 1)
+        coords_overlapped_h = torch.arange(window_size_overlapped)
+        coords_overlapped_w = torch.arange(window_size_overlapped)
 
-        coords_h = torch.arange(window_size_overlapped)
-        coords_w = torch.arange(window_size_overlapped)
+        coords_original = torch.stack(torch.meshgrid([coords_original_h, coords_original_w], indexing="ij"))
+        coords_overlapped = torch.stack(torch.meshgrid([coords_overlapped_h, coords_overlapped_w], indexing="ij"))
 
-        coords_overlapped = torch.stack(torch.meshgrid([coords_h, coords_w], indexing="ij"))
-        coords_overlapped_flatten = torch.flatten(coords_overlapped, 1)
+        coords_original_flatten = rearrange(coords_original, "c h w -> c (h w)")
+        coords_overlapped_flatten = rearrange(coords_overlapped, "c h w -> c (h w)")
 
         relative_coords = coords_overlapped_flatten[:, None, :] - coords_original_flatten[:, :, None]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords = rearrange(relative_coords, "c np_orig np_over -> np_orig np_over c")
 
         relative_coords[:, :, 0] += window_size_original - 1
         relative_coords[:, :, 1] += window_size_original - 1
 
         relative_coords[:, :, 0] *= window_size_original + window_size_overlapped - 1
-        relative_position_index = relative_coords.sum(-1)
 
-        return relative_position_index
+        return relative_coords.sum(-1)
 
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):
@@ -590,7 +598,7 @@ class HAT(nn.Module):
                 count += 1
 
         mask_windows = split_img_into_windows(img_tensor=img_mask, window_size=self.window_size)
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        mask_windows = rearrange(mask_windows, "b ws_h ws_w c -> (b c) (ws_h ws_w)")
 
         attention_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attention_mask.masked_fill_(attention_mask != 0, float(-100.0))
@@ -621,7 +629,7 @@ class HAT(nn.Module):
         x = self.shallow_feature_extraction(x)
         x_after_sfe = x
 
-        x = x.flatten(2).transpose(1, 2)
+        x = rearrange(x, "b c h w -> b (h w) c")
 
         attention_mask = self._calculate_attention_mask((padded_img_height, padded_img_width))
         attention_mask = attention_mask.type_as(x)
@@ -635,7 +643,7 @@ class HAT(nn.Module):
                 attention_mask,
             )
 
-        x = x.transpose(1, 2).view(batch_size, self.num_channels, padded_img_height, padded_img_width)
+        x = rearrange(x, "b (h w) c -> b c h w", h=padded_img_height, w=padded_img_width)
 
         x = self.conv_after_dfe(x) + x_after_sfe
 
@@ -646,3 +654,28 @@ class HAT(nn.Module):
         x += self.imgs_mean
 
         return x
+
+
+if __name__ == "__main__":
+    model = HAT(
+        in_channels=3,
+        num_rhag_blocks=6,
+        num_hab_blocks=6,
+        num_channels=180,
+        compress_ratio=3,
+        squeeze_factor=4,
+        window_size=8,
+        num_heads=6,
+        alpha=0.01,
+        train_img_size=(64, 64),
+        mlp_ratio=4,
+        overlap_ratio=0.5,
+        oca_ratio=0.5,
+        scaling_factor=4,
+    )
+
+    input_img_tensor = torch.randn(1, 3, 64, 64)
+
+    output_img_tensor = model(input_img_tensor)
+
+    print(f"Output shape: {output_img_tensor.shape}")
