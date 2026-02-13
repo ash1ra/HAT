@@ -1,3 +1,12 @@
+"""
+This file uses copied or rewritten code versions from the following repositories:
+
+HAT: https://github.com/XPixelGroup/HAT/blob/main/hat/archs/hat_arch.py
+SwinIR: https://github.com/JingyunLiang/SwinIR/blob/main/models/network_swinir.py
+timm: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
+"""
+
+import math
 from typing import Optional
 
 import torch
@@ -6,6 +15,40 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from utils import combine_windows_into_img, split_img_into_windows
+
+
+def drop_path(x, drop_prob: float = 0.0, training: bool = False, scale_by_keep: bool = True):
+    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
+
+    From: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
+    """
+    if drop_prob == 0.0 or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
+    if keep_prob > 0.0 and scale_by_keep:
+        random_tensor.div_(keep_prob)
+    return x * random_tensor
+
+
+class DropPath(nn.Module):
+    """
+    Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+
+    From: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
+    """
+
+    def __init__(self, drop_prob: float = 0.0, scale_by_keep: bool = True):
+        super().__init__()
+        self.drop_prob = drop_prob
+        self.scale_by_keep = scale_by_keep
+
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
+
+    def extra_repr(self):
+        return f"drop_prob={round(self.drop_prob, 3):0.3f}"
 
 
 class ChannelAttention(nn.Module):
@@ -161,16 +204,19 @@ class HAB(nn.Module):
         squeeze_factor: int,
         window_size: int,
         num_heads: int,
-        alpha: float,
+        cab_scale: float,
         train_img_size: tuple[int, int],
         shift_size: int,
         mlp_ratio: float | int,
+        drop_path_prob: float,
     ) -> None:
         super().__init__()
 
         self.window_size = window_size
-        self.alpha = alpha
+        self.cab_scale = cab_scale
         self.shift_size = shift_size
+
+        self.drop_path = DropPath(drop_prob=drop_path_prob) if drop_path_prob > 0.0 else nn.Identity()
 
         if min(train_img_size) <= window_size:
             self.shift_size = 0
@@ -240,8 +286,8 @@ class HAB(nn.Module):
 
         x_wmsa = rearrange(x_wmsa, "b h w c -> b (h w) c")
 
-        x = x_wmsa + self.alpha * x_cab + residual
-        x = self.mlp(self.layer_norm_2(x)) + x
+        x = self.drop_path(x_wmsa) + self.cab_scale * x_cab + residual
+        x = self.drop_path(self.mlp(self.layer_norm_2(x))) + x
 
         return x
 
@@ -366,10 +412,11 @@ class RHAG(nn.Module):
         squeeze_factor: int,
         window_size: int,
         num_heads: int,
-        alpha: float,
+        cab_scale: float,
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
         oca_ratio: float | int,
+        drop_path_prob: float,
     ) -> None:
         super().__init__()
 
@@ -381,10 +428,11 @@ class RHAG(nn.Module):
                     squeeze_factor=squeeze_factor,
                     window_size=window_size,
                     num_heads=num_heads,
-                    alpha=alpha,
+                    cab_scale=cab_scale,
                     train_img_size=train_img_size,
                     shift_size=0 if i % 2 == 0 else window_size // 2,
                     mlp_ratio=mlp_ratio,
+                    drop_path_prob=drop_path_prob,
                 )
                 for i in range(num_hab_blocks)
             ]
@@ -432,6 +480,75 @@ class RHAG(nn.Module):
         return x
 
 
+class ImageReconstruction(nn.Module):
+    def __init__(
+        self,
+        scaling_factor: int,
+        num_channels: int,
+        num_reconstruction_channels: int,
+        num_output_channels: int,
+    ) -> None:
+        super().__init__()
+
+        self.image_reconstruction_list = [
+            nn.Conv2d(
+                in_channels=num_channels,
+                out_channels=num_reconstruction_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.LeakyReLU(inplace=True),
+        ]
+
+        if (scaling_factor & (scaling_factor - 1)) == 0:  # scaling_factor = 2^n
+            for _ in range(int(math.log(scaling_factor, 2))):
+                self.image_reconstruction_list.extend(
+                    [
+                        nn.Conv2d(
+                            in_channels=num_reconstruction_channels,
+                            out_channels=4 * num_reconstruction_channels,
+                            kernel_size=3,
+                            stride=1,
+                            padding=1,
+                        ),
+                        nn.PixelShuffle(upscale_factor=2),
+                    ]
+                )
+        elif scaling_factor == 3:
+            self.image_reconstruction_list.extend(
+                [
+                    nn.Conv2d(
+                        in_channels=num_reconstruction_channels,
+                        out_channels=9 * num_reconstruction_channels,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    ),
+                    nn.PixelShuffle(upscale_factor=3),
+                ]
+            )
+        else:
+            raise ValueError(
+                f"Scaling factor of {scaling_factor} is not supported. Supported scaling factors: 2^n and 3."
+            )
+
+        self.image_reconstruction_list.append(
+            nn.Conv2d(
+                in_channels=num_reconstruction_channels,
+                out_channels=num_output_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+        )
+
+        self.image_reconstruction = nn.Sequential(*self.image_reconstruction_list)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.image_reconstruction(x)
+
+
 class HAT(nn.Module):
     def __init__(
         self,
@@ -443,12 +560,13 @@ class HAT(nn.Module):
         squeeze_factor: int,
         window_size: int,
         num_heads: int,
-        alpha: float,
+        cab_scale: float,
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
         overlap_ratio: float | int,
         oca_ratio: float | int,
         scaling_factor: int,
+        drop_path_prob: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -473,10 +591,11 @@ class HAT(nn.Module):
                     squeeze_factor=squeeze_factor,
                     window_size=window_size,
                     num_heads=num_heads,
-                    alpha=alpha,
+                    cab_scale=cab_scale,
                     train_img_size=train_img_size,
                     mlp_ratio=mlp_ratio,
                     oca_ratio=oca_ratio,
+                    drop_path_prob=drop_path_prob,
                 )
                 for i in range(num_rhag_blocks)
             ]
@@ -490,22 +609,11 @@ class HAT(nn.Module):
             padding=1,
         )
 
-        self.img_reconstruction = nn.Sequential(
-            nn.Conv2d(
-                in_channels=num_channels,
-                out_channels=num_channels * (scaling_factor**2),
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.PixelShuffle(upscale_factor=scaling_factor),
-            nn.Conv2d(
-                in_channels=num_channels,
-                out_channels=in_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
+        self.img_reconstruction = ImageReconstruction(
+            scaling_factor=scaling_factor,
+            num_channels=num_channels,
+            num_reconstruction_channels=64,
+            num_output_channels=in_channels,
         )
 
         self.register_buffer("rpi_sa", self._calculate_rpi_sa())
@@ -654,28 +762,3 @@ class HAT(nn.Module):
         x += self.imgs_mean
 
         return x
-
-
-if __name__ == "__main__":
-    model = HAT(
-        in_channels=3,
-        num_rhag_blocks=6,
-        num_hab_blocks=6,
-        num_channels=180,
-        compress_ratio=3,
-        squeeze_factor=4,
-        window_size=8,
-        num_heads=6,
-        alpha=0.01,
-        train_img_size=(64, 64),
-        mlp_ratio=4,
-        overlap_ratio=0.5,
-        oca_ratio=0.5,
-        scaling_factor=4,
-    )
-
-    input_img_tensor = torch.randn(1, 3, 64, 64)
-
-    output_img_tensor = model(input_img_tensor)
-
-    print(f"Output shape: {output_img_tensor.shape}")
