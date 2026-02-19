@@ -1,8 +1,8 @@
 import pytest
 import torch
+from torch.utils.data import TensorDataset
 
 import utils
-
 
 TEST_CASES = [
     # (batch_size, img_height, img_width, num_channels, window_size)
@@ -19,6 +19,31 @@ TEST_CASES = [
 ]
 
 TOLERANCE = 1e-8
+
+
+def test_infinite_dataloader_repeats() -> None:
+    dataset_size = 5
+    data_loader_repeats = 3
+
+    dataset = TensorDataset(torch.arange(dataset_size))
+
+    data_loader = utils.InfiniteDataLoader(dataset=dataset, repeats=data_loader_repeats)
+
+    assert len(data_loader) == dataset_size * data_loader_repeats
+
+
+def test_infinite_dataloader_loops_infinitely() -> None:
+    dataset = TensorDataset(torch.arange(3))
+
+    dataloader = utils.InfiniteDataLoader(dataset=dataset, batch_size=2, repeats=1)
+
+    batch_1 = next(dataloader)
+    batch_2 = next(dataloader)
+    batch_3 = next(dataloader)
+
+    assert torch.equal(batch_1[0], torch.tensor([0, 1]))
+    assert torch.equal(batch_2[0], torch.tensor([2]))
+    assert torch.equal(batch_3[0], torch.tensor([0, 1]))
 
 
 @pytest.mark.parametrize("batch_size, img_height, img_width, num_channels, window_size", TEST_CASES)
