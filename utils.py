@@ -12,8 +12,6 @@ from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
-import config
-
 
 def create_logger(
     log_level: str,
@@ -256,8 +254,8 @@ def calculate_ssim(
     sr_img_tensor: Tensor,
     hr_img_tensor: Tensor,
     crop_border: int,
-    window_size: int,
-    return_map: Literal[False],
+    window_size: int = 11,
+    return_map: Literal[False] = False,
 ) -> float: ...
 
 
@@ -266,8 +264,8 @@ def calculate_ssim(
     sr_img_tensor: Tensor,
     hr_img_tensor: Tensor,
     crop_border: int,
-    window_size: int,
-    return_map: Literal[True],
+    window_size: int = 11,
+    return_map: Literal[True] = True,
 ) -> tuple[float, Tensor]: ...
 
 
@@ -275,7 +273,7 @@ def calculate_ssim(
     sr_img_tensor: Tensor,
     hr_img_tensor: Tensor,
     crop_border: int,
-    window_size: int,
+    window_size: int = 11,
     return_map: bool = False,
 ) -> float | tuple[float, Tensor | None]:
     if sr_img_tensor.dim() == 3:
