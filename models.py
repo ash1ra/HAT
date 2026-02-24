@@ -3,7 +3,6 @@ This file uses copied or rewritten code versions from the following repositories
 
 HAT: https://github.com/XPixelGroup/HAT/blob/main/hat/archs/hat_arch.py
 SwinIR: https://github.com/JingyunLiang/SwinIR/blob/main/models/network_swinir.py
-timm: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
 """
 
 import math
@@ -13,42 +12,9 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils import checkpoint
 
 from utils import combine_windows_into_img, split_img_into_windows
-
-
-def drop_path(x, drop_prob: float = 0.0, training: bool = False, scale_by_keep: bool = True):
-    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
-
-    From: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
-    """
-    if drop_prob == 0.0 or not training:
-        return x
-    keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
-    if keep_prob > 0.0 and scale_by_keep:
-        random_tensor.div_(keep_prob)
-    return x * random_tensor
-
-
-class DropPath(nn.Module):
-    """
-    Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
-
-    From: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
-    """
-
-    def __init__(self, drop_prob: float = 0.0, scale_by_keep: bool = True):
-        super().__init__()
-        self.drop_prob = drop_prob
-        self.scale_by_keep = scale_by_keep
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
-
-    def extra_repr(self):
-        return f"drop_prob={round(self.drop_prob, 3):0.3f}"
 
 
 class ChannelAttention(nn.Module):
@@ -208,15 +174,12 @@ class HAB(nn.Module):
         train_img_size: tuple[int, int],
         shift_size: int,
         mlp_ratio: float | int,
-        drop_path_prob: float,
     ) -> None:
         super().__init__()
 
         self.window_size = window_size
         self.cab_scale = cab_scale
         self.shift_size = shift_size
-
-        self.drop_path = DropPath(drop_prob=drop_path_prob) if drop_path_prob > 0.0 else nn.Identity()
 
         if min(train_img_size) <= window_size:
             self.shift_size = 0
@@ -259,7 +222,7 @@ class HAB(nn.Module):
 
         x = rearrange(x, "b (h w) c -> b h w c", h=img_height, w=img_width)
 
-        x_cab = rearrange(x, "b h w c -> b c h w")
+        x_cab = rearrange(x, "b h w c -> b c h w").to(memory_format=torch.channels_last)
         x_cab = self.cab(x_cab)
         x_cab = rearrange(x_cab, "b c h w -> b (h w) c")
 
@@ -286,8 +249,8 @@ class HAB(nn.Module):
 
         x_wmsa = rearrange(x_wmsa, "b h w c -> b (h w) c")
 
-        x = self.drop_path(x_wmsa) + self.cab_scale * x_cab + residual
-        x = self.drop_path(self.mlp(self.layer_norm_2(x))) + x
+        x = x_wmsa + self.cab_scale * x_cab + residual
+        x = self.mlp(self.layer_norm_2(x)) + x
 
         return x
 
@@ -298,14 +261,14 @@ class OCAB(nn.Module):
         num_channels: int,
         num_heads: int,
         window_size: int,
-        oca_ratio: int | float,
+        overlap_ratio: int | float,
         mlp_ratio: float | int,
     ) -> None:
         super().__init__()
 
         self.num_channels = num_channels
         self.window_size = window_size
-        self.overlapped_window_size = int(window_size * oca_ratio) + window_size
+        self.overlapped_window_size = int(window_size * overlap_ratio) + window_size
         self.num_heads = num_heads
 
         self.scale = (num_channels // num_heads) ** -0.5
@@ -415,8 +378,7 @@ class RHAG(nn.Module):
         cab_scale: float,
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
-        oca_ratio: float | int,
-        drop_path_prob: float,
+        overlap_ratio: float | int,
     ) -> None:
         super().__init__()
 
@@ -432,7 +394,6 @@ class RHAG(nn.Module):
                     train_img_size=train_img_size,
                     shift_size=0 if i % 2 == 0 else window_size // 2,
                     mlp_ratio=mlp_ratio,
-                    drop_path_prob=drop_path_prob,
                 )
                 for i in range(num_hab_blocks)
             ]
@@ -442,7 +403,7 @@ class RHAG(nn.Module):
             num_channels=num_channels,
             num_heads=num_heads,
             window_size=window_size,
-            oca_ratio=oca_ratio,
+            overlap_ratio=overlap_ratio,
             mlp_ratio=mlp_ratio,
         )
 
@@ -472,7 +433,7 @@ class RHAG(nn.Module):
 
         x = self.ocab(x, x_size, rpi_oca)
 
-        x = rearrange(x, "b (h w) c -> b c h w", h=img_height, w=img_width)
+        x = rearrange(x, "b (h w) c -> b c h w", h=img_height, w=img_width).to(memory_format=torch.channels_last)
         x = self.conv(x)
         x = rearrange(x, "b c h w -> b (h w) c")
         x += residual
@@ -564,15 +525,15 @@ class HAT(nn.Module):
         train_img_size: tuple[int, int],
         mlp_ratio: float | int,
         overlap_ratio: float | int,
-        oca_ratio: float | int,
         scaling_factor: int,
-        drop_path_prob: float = 0.0,
+        use_gradient_checkpointing: bool,
     ) -> None:
         super().__init__()
 
         self.window_size = window_size
-        self.oca_ratio = oca_ratio
+        self.overlap_ratio = overlap_ratio
         self.scaling_factor = scaling_factor
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         self.shallow_feature_extraction = nn.Conv2d(
             in_channels=in_channels,
@@ -581,6 +542,8 @@ class HAT(nn.Module):
             stride=1,
             padding=1,
         )
+
+        self.norm_before_dfe = nn.LayerNorm(normalized_shape=num_channels)
 
         self.deep_feature_extraction = nn.ModuleList(
             [
@@ -594,12 +557,13 @@ class HAT(nn.Module):
                     cab_scale=cab_scale,
                     train_img_size=train_img_size,
                     mlp_ratio=mlp_ratio,
-                    oca_ratio=oca_ratio,
-                    drop_path_prob=drop_path_prob,
+                    overlap_ratio=overlap_ratio,
                 )
                 for i in range(num_rhag_blocks)
             ]
         )
+
+        self.norm_after_dfe = nn.LayerNorm(normalized_shape=num_channels)
 
         self.conv_after_dfe = nn.Conv2d(
             in_channels=num_channels,
@@ -648,7 +612,7 @@ class HAT(nn.Module):
 
     def _calculate_rpi_oca(self) -> Tensor:
         window_size_original = self.window_size
-        window_size_overlapped = self.window_size + int(self.oca_ratio * self.window_size)
+        window_size_overlapped = self.window_size + int(self.overlap_ratio * self.window_size)
 
         coords_original_h = torch.arange(window_size_original)
         coords_original_w = torch.arange(window_size_original)
@@ -739,19 +703,36 @@ class HAT(nn.Module):
 
         x = rearrange(x, "b c h w -> b (h w) c")
 
+        x = self.norm_before_dfe(x)
+
         attention_mask = self._calculate_attention_mask((padded_img_height, padded_img_width))
         attention_mask = attention_mask.type_as(x)
 
         for layer in self.deep_feature_extraction:
-            x = layer(
-                x,
-                (padded_img_height, padded_img_width),
-                self.rpi_sa,
-                self.rpi_oca,
-                attention_mask,
-            )
+            if self.use_gradient_checkpointing and x.requires_grad:
+                x = checkpoint.checkpoint(
+                    layer,
+                    x,
+                    (padded_img_height, padded_img_width),
+                    self.rpi_sa,
+                    self.rpi_oca,
+                    attention_mask,
+                    use_reentrant=False,
+                )
+            else:
+                x = layer(
+                    x,
+                    (padded_img_height, padded_img_width),
+                    self.rpi_sa,
+                    self.rpi_oca,
+                    attention_mask,
+                )
 
-        x = rearrange(x, "b (h w) c -> b c h w", h=padded_img_height, w=padded_img_width)
+        x = self.norm_after_dfe(x)
+
+        x = rearrange(x, "b (h w) c -> b c h w", h=padded_img_height, w=padded_img_width).to(
+            memory_format=torch.channels_last
+        )
 
         x = self.conv_after_dfe(x) + x_after_sfe
 
