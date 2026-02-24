@@ -132,7 +132,7 @@ class StaticPairDataset(Dataset):
                 if img_width > self.patch_size and img_height > self.patch_size:
                     valid_images.append(img_name)
                 else:
-                    logger.warning(f"Dropped {img_name} ({img_width}x{img_height})")
+                    logger.warning(f"[Data] Dropped '{img_name}' ({img_width}x{img_height})")
 
         self.img_names = valid_images
 
