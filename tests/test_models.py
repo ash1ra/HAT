@@ -23,14 +23,14 @@ HAB_IMGS = [
 ]
 
 RHAG_CONFIGS = [
-    # window_size, num_heads, oca_ratio
+    # window_size, num_heads, overlap_ratio
     (8, 4, 0.5),
     (4, 2, 0.5),
     (8, 4, 0.25),
 ]
 
 OCAB_CONFIGS = [
-    # window_size, num_heads, oca_ratio
+    # window_size, num_heads, overlap_ratio
     (8, 4, 0.5),
     (4, 2, 0.5),
     (8, 4, 0.25),
@@ -65,9 +65,8 @@ def model_factory() -> Callable:
             train_img_size=(64, 64),
             mlp_ratio=4,
             overlap_ratio=0.5,
-            oca_ratio=0.5,
             scaling_factor=4,
-            drop_path_prob=0.0,
+            use_gradient_checkpointing=True,
         )
 
         model_parameters.update(kwargs)
@@ -154,7 +153,7 @@ def test_hat_calculate_rpi_oca(model_factory: Callable) -> None:
     model = model_factory()
 
     window_size = model.window_size
-    overlapped_window_size = window_size + int(model.oca_ratio * window_size)
+    overlapped_window_size = window_size + int(model.overlap_ratio * window_size)
     rpi_oca = model._calculate_rpi_oca()
 
     assert rpi_oca.shape == (window_size**2, overlapped_window_size**2)
@@ -181,14 +180,14 @@ def test_hat_calculate_attention_mask(model_factory: Callable) -> None:
     assert torch.equal(torch.unique(attention_mask), torch.tensor([-100.0, 0.0]))
 
 
-@pytest.mark.parametrize("window_size, num_heads, oca_ratio", RHAG_CONFIGS)
+@pytest.mark.parametrize("window_size, num_heads, overlap_ratio", RHAG_CONFIGS)
 def test_rhag(
     window_size: int,
     num_heads: int,
-    oca_ratio: float,
+    overlap_ratio: float,
 ) -> None:
     batch_size, img_height, img_width, num_channels = 1, 64, 64, 32
-    overlapped_window_size = window_size + int(oca_ratio * window_size)
+    overlapped_window_size = window_size + int(overlap_ratio * window_size)
 
     rpi_sa = torch.randint(0, ((2 * window_size - 1) ** 2), (window_size**2, window_size**2))
     rpi_oca = torch.randint(
@@ -208,8 +207,7 @@ def test_rhag(
         cab_scale=0.01,
         train_img_size=(img_height, img_width),
         mlp_ratio=4,
-        oca_ratio=oca_ratio,
-        drop_path_prob=0.0,
+        overlap_ratio=overlap_ratio,
     )
 
     input_img_tensor = torch.randn(batch_size, img_height * img_width, num_channels)
@@ -225,14 +223,14 @@ def test_rhag(
     assert input_img_tensor.shape == output_img_tensor.shape
 
 
-@pytest.mark.parametrize("window_size, num_heads, oca_ratio", OCAB_CONFIGS)
+@pytest.mark.parametrize("window_size, num_heads, overlap_ratio", OCAB_CONFIGS)
 def test_ocab(
     window_size: int,
     num_heads: int,
-    oca_ratio: float,
+    overlap_ratio: float,
 ) -> None:
     batch_size, img_height, img_width, num_channels = 1, 64, 64, 32
-    overlapped_window_size = window_size + int(oca_ratio * window_size)
+    overlapped_window_size = window_size + int(overlap_ratio * window_size)
 
     rpi_oca = torch.randint(
         0, ((window_size + overlapped_window_size - 1) ** 2), (window_size**2, overlapped_window_size**2)
@@ -242,7 +240,7 @@ def test_ocab(
         num_channels=num_channels,
         num_heads=num_heads,
         window_size=window_size,
-        oca_ratio=oca_ratio,
+        overlap_ratio=overlap_ratio,
         mlp_ratio=2,
     )
 
@@ -279,7 +277,6 @@ def test_hab(
         train_img_size=(img_height, img_width),
         shift_size=0,
         mlp_ratio=2,
-        drop_path_prob=0.0,
     )
 
     input_img_tensor = torch.randn(batch_size, img_height * img_width, num_channels)
