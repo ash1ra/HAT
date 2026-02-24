@@ -88,6 +88,10 @@ def main():
         use_gradient_checkpointing=config.USE_GRADIENT_CHECKPOINTING,
     ).to(memory_format=torch.channels_last)  # type: ignore
 
+    torch._dynamo.config.suppress_errors = True
+
+    model = torch.compile(model)
+
     loss_fn = nn.L1Loss()
 
     optimizer = Adam(

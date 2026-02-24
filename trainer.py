@@ -85,7 +85,8 @@ class Trainer:
         dummy_input = torch.randn(1, 3, config.PATCH_SIZE, config.PATCH_SIZE).to(self.device)
 
         self.model.eval()
-        flops, _ = profile(model=self.model, inputs=(dummy_input,), verbose=False)
+        unwrapped_model = getattr(self.model, "_orig_mod", self.model)
+        flops, _ = profile(model=unwrapped_model, inputs=(dummy_input,), verbose=False)
         self.model.train()
 
         for module in self.model.modules():
