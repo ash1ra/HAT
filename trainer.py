@@ -37,6 +37,7 @@ class Trainer:
         scaler: Optional[GradScaler] = None,
         device: config.DeviceType = "cpu",
         dtype: torch.dtype = torch.bfloat16,
+        use_wandb: bool = False,
     ) -> None:
         self.model = model.to(device)
         self.train_dataloader = train_dataloader
@@ -54,6 +55,7 @@ class Trainer:
         self.scaler = scaler
         self.device = device
         self.dtype = dtype
+        self.use_wandb = use_wandb
 
         self.root_dir_path = root_dir_path
         self.checkpoints_dir_path = self.root_dir_path / "checkpoints"
@@ -208,7 +210,7 @@ class Trainer:
             f"({format_time(self.avg_iter_time)} / {elapsed_time} / {remaining_time}) | Loss: {loss:.4f} | LR: {current_lr:.2e}"
         )
 
-        if config.USE_WANDB:
+        if self.use_wandb:
             wandb.log(
                 {
                     "train/loss": loss,
@@ -232,7 +234,7 @@ class Trainer:
             f"Validation | Iter: {self.current_iter} | Loss: {avg_loss:.4f} | PSNR: {avg_psnr:.2f} | SSIM: {avg_ssim:.4f}."
         )
 
-        if config.USE_WANDB:
+        if self.use_wandb:
             self._log_imgs(
                 lr_img_tensor=lr_img_tensor[0],
                 sr_img_tensor=sr_img_tensor[0],
@@ -399,7 +401,7 @@ class Trainer:
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict() if self.scheduler else None,
             "scaler_state": self.scaler.state_dict() if self.scaler else None,
-            "wandb_id": wandb.run.id if wandb.run else None,
+            "wandb_id": wandb.run.id if self.use_wandb and wandb.run else None,
         }
 
         if is_best:
