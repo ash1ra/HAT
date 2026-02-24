@@ -68,6 +68,7 @@ def trainer_setup(tmp_path: Path) -> tuple[Trainer, nn.Module, optim.Optimizer, 
         gradient_clipping_norm=0.5,
         device="cpu",
         dtype=torch.bfloat16,
+        use_wandb=False,
     )
 
     return trainer, model, optimizer, root_dir

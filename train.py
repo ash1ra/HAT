@@ -149,6 +149,7 @@ def main():
         scheduler=scheduler,
         device=device,
         dtype=torch.bfloat16,
+        use_wandb=config.USE_WANDB,
     )
 
     if target_checkpoint_path:
