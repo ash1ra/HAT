@@ -105,7 +105,13 @@ class Trainer:
         logger.info(dash_line)
         logger.info("Model & Training Information")
         logger.info(dash_line)
-        logger.info(f"Model Architecture: {self.model.__class__.__name__}")
+
+        if self.model.__class__.__name__ == "OptimizedModule":
+            model_architecture = self.model._orig_mod.__class__.__name__
+        else:
+            model_architecture = self.model.__class__.__name__
+        logger.info(f"Model Architecture: {model_architecture}")
+
         logger.info(f"Total Parameters: {total_params / 1e6:.2f} M")
         logger.info(f"Trainable Parameters: {trainable_params / 1e6:.2f} M")
         logger.info(f"GFLOPs (per patch): {flops / 1e9:.4f} G")
