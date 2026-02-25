@@ -70,6 +70,7 @@ class Trainer:
 
         self.current_iter = 0
         self.best_psnr = float("-inf")
+        self.best_ssim = float("-inf")
 
     def _update_avg_time(self) -> None:
         time_scaler = 0.1
@@ -195,11 +196,16 @@ class Trainer:
 
         combined_img_tensor = torch.cat([lr_img_tensor_resized, sr_img_tensor, hr_img_tensor], dim=2)
 
+        if self.model.__class__.__name__ == "OptimizedModule":
+            model_architecture = self.model._orig_mod.__class__.__name__
+        else:
+            model_architecture = self.model.__class__.__name__
+
         wandb.log(
             {
                 "val/visual_results": wandb.Image(
                     data_or_path=combined_img_tensor,
-                    caption=f"Iter {self.current_iter}: LR (Nearest) | SR ({self.model.__class__.__name__}) | HR(Truth)",
+                    caption=f"Iter {self.current_iter}: LR (Nearest) | SR ({model_architecture}) | HR(Truth)",
                 )
             },
             step=self.current_iter,
@@ -246,6 +252,7 @@ class Trainer:
                 sr_img_tensor=sr_img_tensor[0],
                 hr_img_tensor=hr_img_tensor[0],
             )
+
             wandb.log(
                 {
                     "val/loss": avg_loss,
@@ -256,6 +263,8 @@ class Trainer:
                         data_or_path=torch.clamp(ssim_map.squeeze(0), 0.0, 1.0),
                         caption=f"Iter {self.current_iter}: SSIM Map (brighter = better)",
                     ),
+                    "val/best_psnr": self.best_psnr,
+                    "val/best_ssim": self.best_ssim,
                 },
                 step=self.current_iter,
             )
@@ -343,6 +352,14 @@ class Trainer:
         avg_psnr /= len(self.val_dataloader)
         avg_ssim /= len(self.val_dataloader)
 
+        new_best_psnr = False
+        if avg_psnr > self.best_psnr:
+            self.best_psnr = avg_psnr
+            new_best_psnr = True
+
+        if avg_ssim > self.best_ssim:
+            self.best_ssim = avg_ssim
+
         self._log_val_progress(
             avg_loss=avg_loss,
             avg_psnr=avg_psnr,
@@ -353,8 +370,7 @@ class Trainer:
             hr_img_tensor=hr_img_tensor,
         )
 
-        if avg_psnr > self.best_psnr:
-            self.best_psnr = avg_psnr
+        if new_best_psnr:
             self.save_checkpoint(is_best=True)
 
     def train(self) -> None:
