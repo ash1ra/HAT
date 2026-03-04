@@ -415,7 +415,8 @@ class Trainer:
         logger.info("Training run completed successfully.")
 
     def save_checkpoint(self, is_best: bool = False) -> None:
-        model_state = {key: value.contiguous() for key, value in self.model.state_dict().items()}
+        unwrapped_model = getattr(self.model, "_orig_mod", self.model)
+        model_state = {key: value.contiguous() for key, value in unwrapped_model.state_dict().items()}
 
         train_state = {
             "current_iter": self.current_iter,
@@ -444,8 +445,11 @@ class Trainer:
         if model_path.exists():
             checkpoint_state_dict = load_file(model_path, device=self.device)
 
+            clean_state_dict = {k.replace("_orig_mod.", ""): v for k, v in checkpoint_state_dict.items()}
+            unwrapped_model = getattr(self.model, "_orig_mod", self.model)
+
             try:
-                self.model.load_state_dict(checkpoint_state_dict)
+                unwrapped_model.load_state_dict(clean_state_dict)
             except RuntimeError:
                 logger.error("[Checkpoint] Architecture mismatch during weights loading! Raising error.")
                 raise
