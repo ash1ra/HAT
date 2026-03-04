@@ -123,18 +123,19 @@ class StaticPairDataset(Dataset):
 
         self.img_names = sorted(list(hr_img_names & lr_img_names))
 
-        valid_images = []
-        for img_name in self.img_names:
-            lr_path = self.lr_dir_path / img_name
+        if not self.test_mode:
+            valid_images = []
+            for img_name in self.img_names:
+                lr_path = self.lr_dir_path / img_name
 
-            with Image.open(lr_path) as img:
-                img_width, img_height = img.size
-                if img_width > self.patch_size and img_height > self.patch_size:
-                    valid_images.append(img_name)
-                else:
-                    logger.warning(f"[Data] Dropped '{img_name}' ({img_width}x{img_height})")
+                with Image.open(lr_path) as img:
+                    img_width, img_height = img.size
+                    if img_width >= self.patch_size and img_height >= self.patch_size:
+                        valid_images.append(img_name)
+                    else:
+                        logger.warning(f"[Data] Dropped '{img_name}' ({img_width}x{img_height})")
 
-        self.img_names = valid_images
+            self.img_names = valid_images
 
         if len(self.img_names) == 0:
             raise FileNotFoundError(
