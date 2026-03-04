@@ -172,7 +172,6 @@ source = { virtual = "." }
 dependencies = [
     { name = "einops" },
     { name = "safetensors" },
-    { name = "thop" },
     { name = "torch" },
     { name = "torchvision" },
     { name = "tqdm" },
@@ -188,7 +187,6 @@ dev = [
 requires-dist = [
     { name = "einops", specifier = ">=0.8.2" },
     { name = "safetensors", specifier = ">=0.7.0" },
-    { name = "thop", specifier = ">=0.1.1.post2209072238" },
     { name = "torch", specifier = ">=2.10.0" },
     { name = "torchvision", specifier = ">=0.25.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
@@ -789,17 +787,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
-]
-
-[[package]]
-name = "thop"
-version = "0.1.1.post2209072238"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "torch" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/0f/72beeab4ff5221dc47127c80f8834b4bcd0cb36f6ba91c0b1d04a1233403/thop-0.1.1.post2209072238-py3-none-any.whl", hash = "sha256:01473c225231927d2ad718351f78ebf7cffe6af3bed464c4f1ba1ef0f7cdda27", size = 15443, upload-time = "2022-09-07T14:38:37.211Z" },
 ]
 
 [[package]]

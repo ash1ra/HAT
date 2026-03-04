@@ -3,17 +3,19 @@ from typing import Optional
 
 import torch
 from safetensors.torch import load_file, save_file
-from thop import profile
+
 from torch import Tensor, nn
 from torch.cuda.amp import GradScaler
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
+from torch.utils.flop_counter import FlopCounterMode
 from tqdm import tqdm
 
 import config
 import wandb
+from models import HAT
 from utils import Timer, calculate_psnr, calculate_ssim, format_time, logger
 
 
@@ -85,18 +87,36 @@ class Trainer:
         self.timer.last_iter_duration = 0.0
 
     def _log_model_info(self) -> None:
+        temp_model = (
+            HAT(
+                in_channels=3,
+                num_rhag_blocks=config.NUM_RHAG_BLOCKS,
+                num_hab_blocks=config.NUM_HAB_BLOCKS,
+                num_channels=config.NUM_CHANNELS,
+                compress_ratio=config.COMPRESS_RATIO,
+                squeeze_factor=config.SQUEEZE_FACTOR,
+                window_size=config.WINDOW_SIZE,
+                num_heads=config.NUM_HEADS,
+                cab_scale=config.CAB_SCALE,
+                train_img_size=(config.PATCH_SIZE, config.PATCH_SIZE),
+                mlp_ratio=config.MLP_RATIO,
+                overlap_ratio=config.OVERLAP_RATIO,
+                scaling_factor=config.SCALING_FACTOR,
+                use_gradient_checkpointing=False,
+            )
+            .to(self.device)
+            .eval()
+        )
+
         dummy_input = torch.randn(1, 3, config.PATCH_SIZE, config.PATCH_SIZE).to(self.device)
+        flop_counter = FlopCounterMode(temp_model, display=False)
+        with flop_counter:
+            temp_model(dummy_input)
 
-        self.model.eval()
-        unwrapped_model = getattr(self.model, "_orig_mod", self.model)
-        flops, _ = profile(model=unwrapped_model, inputs=(dummy_input,), verbose=False)
-        self.model.train()
+        flops = flop_counter.get_total_flops()
 
-        for module in self.model.modules():
-            if hasattr(module, "total_ops"):
-                del module.total_ops
-            if hasattr(module, "total_params"):
-                del module.total_params
+        del temp_model
+        torch.cuda.empty_cache()
 
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
