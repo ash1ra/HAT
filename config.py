@@ -3,6 +3,8 @@ from typing import Literal, TypeAlias
 
 DeviceType: TypeAlias = Literal["cuda", "cpu"]
 
+IMG_EXTENSIONS = [".png", ".jpg", ".jpeg"]
+
 # Architecture settings
 NUM_CHANNELS = 180
 NUM_RHAG_BLOCKS = 6
