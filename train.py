@@ -1,14 +1,15 @@
+import logging
 import math
 from pathlib import Path
 
 import torch
-import wandb
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader
 
 import config
+import wandb
 from datasets import DynamicPairDataset, StaticPairDataset
 from models import HAT
 from trainer import Trainer
@@ -16,6 +17,10 @@ from utils import InfiniteDataLoader, logger
 
 
 def main():
+    torch._dynamo.config.suppress_errors = True
+    torch._dynamo.config.verbose = False
+    logging.getLogger("torch._dynamo").setLevel(logging.ERROR)
+
     torch.backends.fp32_precision = "tf32"  # type: ignore
     torch.backends.cuda.matmul.fp32_precision = "tf32"
     torch.backends.cudnn.fp32_precision = "tf32"  # type: ignore
@@ -87,8 +92,6 @@ def main():
         scaling_factor=config.SCALING_FACTOR,
         use_gradient_checkpointing=config.USE_GRADIENT_CHECKPOINTING,
     ).to(memory_format=torch.channels_last)  # type: ignore
-
-    torch._dynamo.config.suppress_errors = True
 
     model = torch.compile(model)
 

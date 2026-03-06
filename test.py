@@ -101,7 +101,9 @@ def main() -> None:
     elif config.LOAD_CHECKPOINT and config.CHECKPOINT_DIR_PATH.exists():
         model.load_state_dict(load_file(config.CHECKPOINT_DIR_PATH / "model.safetensors", device=device))
     else:
-        logger.error("Model weights were not loaded. Please check your checkpoint paths.")
+        raise FileNotFoundError(
+            "Failed to load model weights. Please verify that the checkpoint paths in 'config.py' exist and are valid."
+        )
 
     for test_dataset_path in config.TEST_DATASET_PATHS:
         dataset = StaticPairDataset(

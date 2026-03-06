@@ -459,7 +459,7 @@ class Trainer:
         save_file(model_state, save_dir / "model.safetensors")
         torch.save(train_state, save_dir / "state.pth")
 
-    def load_checkpoint(self, checkpoint_dir_path: Path) -> None:
+    def load_checkpoint(self, checkpoint_dir_path: Path, load_training_state: bool = True) -> None:
         model_path = checkpoint_dir_path / "model.safetensors"
 
         if model_path.exists():
@@ -480,7 +480,7 @@ class Trainer:
 
         state_path = checkpoint_dir_path / "state.pth"
 
-        if state_path.exists():
+        if load_training_state and state_path.exists():
             state = torch.load(checkpoint_dir_path / "state.pth", map_location=self.device)
 
             self.current_iter = state["current_iter"]
@@ -495,5 +495,7 @@ class Trainer:
                 self.scaler.load_state_dict(state["scaler_state"])
 
             logger.info("[Checkpoint] Training state loaded successfully.")
+        elif not load_training_state:
+            logger.info("[Checkpoint] Skipped loading training state.")
         else:
             logger.warning(f"[Checkpoint] Model state file not found at '{state_path}'.")
