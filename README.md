@@ -6,7 +6,7 @@ This implementation is based on papers [Activating More Pixels in Image Super-Re
 
 ## Demonstration
 
-The following images compare standard bicubic interpolation with the output of the HAT model.
+The following images demonstrate the visual improvements of the HAT model compared to standard bicubic interpolation.
 
 ![Baboon comparison image](images/sr_baboon_comparison.png)
 ![Butterfly comparison image](images/sr_butterfly_comparison.png)
@@ -32,7 +32,7 @@ The model is pre-trained on the **ImageNet** dataset. During training, the `Dyna
 
 ### Fine-Tuning
 
-The model is fine-tuned on the **DF2K (DIV2K + Flickr2K)** dataset. The `prepare_data.py` script is used to crop HR images to ensure divisibility by the scaling factor and to generate corresponding LR images using MATLAB-like bicubic downsampling. During training, the `StaticPairDataset` class in `datasets.py` further processes these images by extracting random patches and applying augmentations like horizontal/vertical flips and rotations.
+The model is fine-tuned on the **DF2K (DIV2K + Flickr2K)** dataset. Prior to training, the `prepare_data.py` script is used to crop HR images to ensure divisibility by the scaling factor and to generate corresponding LR images using MATLAB-like bicubic downsampling. During training, the `StaticPairDataset` class in `datasets.py` further processes these images by extracting random patches and applying augmentations like horizontal/vertical flips and rotations.
 
 ### Validation
 
@@ -49,7 +49,7 @@ The `test.py` script is configured to evaluate the trained model on standard ben
 ├── checkpoints/             # Model weights (.safetensors) and training states (.pth)
 ├── images/                  # Inference inputs and outputs
 ├── config.py                # Hyperparameters and file paths
-├── dataset.py               # Dataset classes and image augmentations
+├── datasets.py               # Dataset classes and image augmentations
 ├── prepare_data.py          # Script for generating HR and LR pairs from raw datasets 
 ├── inference.py             # Inference pipeline
 ├── models.py                # HAT model architecture definition
@@ -127,8 +127,8 @@ source .venv/bin/activate
     ...
     ```
 
-4. Run `prepare_data.py` to generate the training/validation pairs. This script will create `HR` and `LR_x{scaling factor}` directories within your dataset path, which are required for the training process.
-5. Update the paths (`TRAIN_DATASET_PATH`, etc.) in `config.py` to point to these newly created directories.
+5. Run `prepare_data.py` to generate the training/validation pairs. This script will create `HR` and `LR_x{scaling factor}` directories within your dataset path, which are required for the training process.
+6. Update the paths (`TRAIN_DATASET_PATH`, etc.) in `config.py` to point to these newly created directories.
 
 ### 3. Training
 
@@ -157,24 +157,24 @@ To evaluate the model's performance on the test datasets:
 The inference script supports command-line flags to specify parameters without editing the configuration file. To upscale a single image:
 
 ```bash
-python inference.py -i images/input.png -o images/output.png --scale 4 --comparison
+python inference.py -i images/input.png -o images/output.png -s 4
 ```
 
 Available flags:
 - `-i`, `--input`: Path to the input image.
 - `-o`, `--output`: Path to save the result.
-- `-s`, `--scale`: Upscaling factor.
+- `-s`, `--scaling-factor`: Upscaling factor.
 - `-ts`, `--tile-size`: Size of the processing tiles for memory efficiency.
 - `-to`, `--tile-overlap`: Number of overlapping pixels between adjacent tiles to prevent edge blending artifacts.
 - `-c`, `--comparison`: Generate an additional image comparing the Bicubic baseline, HAT output, and original image.
-- `-cb`, `--crop-box`: Coordinates for a specific crop box in the comparison image.
+- `-v`, `--vertical`: Stack comparison images vertically.
 - `-dt`, `--dtype`: Floating-point precision used for Automatic Mixed Precision (AMP) during model inference.
 
 ## Training Results
 
 ![HAT model training metrics](images/hat_training_metrics.png)
 
-The model was pre-trained for **100,000 iterations** and fine-tuned for **50,000 iterations** with a **batch size of 32** on an **NVIDIA RTX 4060 Ti (8 GB)**, which took nearly **216 and ? hours** respectively. The pre-training dataset consisted of **1,152,197** filtered images from the ImageNet dataset. The fine-tuning dataset consisted of **3450** images from the DF2K dataset. The rest of the hyperparameters are specified in `config.py` file. The final model selected is the one with the **highest PSNR** on the validation set.
+The model was pre-trained for **100,000 iterations** and fine-tuned for **50,000 iterations** with a **batch size of 32** on an **NVIDIA RTX 4060 Ti (8 GB)**, which took approximately **216 and 106 hours**, respectively. The pre-training dataset consisted of **1,152,197** filtered images from the ImageNet dataset. The fine-tuning dataset consisted of **3450** images from the DF2K dataset. The rest of the hyperparameters are specified in `config.py` file. The final model selected is the one with the **highest PSNR** on the validation set.
 
 ## Benchmark Evaluation (4x Upscaling)
 
@@ -183,17 +183,19 @@ The final model (`checkpoints/best`) was evaluated on standard benchmark dataset
 **PSNR (dB) / SSIM Comparison**
 | Dataset | HAT (this project) | HAT (paper)
 | :--- | :---: | :---:
-| **Set5** | ?/? | 33.18/0.9073
-| **Set14** | ?/? | 29.38/0.8001 
-| **BSDS100** | ?/? | 28.05/0.7534
-| **Urban100**| ?/? | 28.37/0.8447
-| **Manga109** | ?/? | 32.87/0.9319
+| **Set5** | 32.84/0.9039 | 33.18/0.9073
+| **Set14** | 29.18/0.7956 | 29.38/0.8001 
+| **BSDS100** | 27.93/0.7493 | 28.05/0.7534
+| **Urban100**| 27.70/0.8294 | 28.37/0.8447
+| **Manga109** | 32.29/0.9274 | 32.87/0.9319
 
 ***Note**: Differences in results are primarily due to training constraints; I pre-trained the model for 100,000 iterations compared to the original 800,000 iterations and fine-tuned the model for 50,000 iterations compared to the original 250,000. Additionally, the learning rate in this implementation was decayed five times more frequently.*
 
+***Note 2**: Additionally, during the first 78,000 pre-training iterations, one image was inadvertently omitted from the Set14 validation dataset. Correcting this omission caused a sudden but expected drop in validation metrics.*
+
 ## Visual Comparisons
 
-The following images compare the standard bicubic interpolation with the output of the HAT model. I selected various images where the difference in results would be visible, including anime images, photos, etc.
+These examples include a diverse set of subjects (e.g., anime, real-world photography) to highlight the model's ability to reconstruct fine details and complex textures.
 
 ![Comparison image 1](images/sr_img_1_comparison.png)
 ![Comparison image 2](images/sr_img_2_comparison.png)
