@@ -22,7 +22,7 @@ MLP_RATIO = 2
 SCALING_FACTOR = 4
 PATCH_SIZE = 64
 
-CURRENT_PHASE: Literal["pretraining", "fine-tuning"] = "pretraining"
+CURRENT_PHASE: Literal["pretraining", "fine-tuning"] = "fine-tuning"
 
 if CURRENT_PHASE == "pretraining":
     # Pretraining settings
@@ -48,7 +48,7 @@ elif CURRENT_PHASE == "fine-tuning":
 GRADIENT_CLIPPING_NORM = 0.5
 USE_GRADIENT_CHECKPOINTING = True
 
-# Tecnical settings
+# Technical settings
 LOG_FREQ = 10
 VAL_FREQ = 1000
 SAVE_CHECKPOINT_FREQ = 10000
@@ -76,7 +76,7 @@ TEST_DATASET_PATHS = [
 ]
 
 # Checkpoint settings
-LOAD_BEST_CHECKPOINT = False
+LOAD_BEST_CHECKPOINT = True
 LOAD_CHECKPOINT = False
 
 BEST_CHECKPOINT_DIR_PATH = Path("checkpoints/best")
