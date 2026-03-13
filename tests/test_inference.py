@@ -5,7 +5,7 @@ import torch
 from PIL import Image
 from torch import Tensor, nn
 
-from inference import _tiled_inference, create_lr_hr_pair, inference
+from inference import create_lr_and_hr_imgs, inference, tiled_inference
 
 TEST_LR_HR_PAIR_PARAMETERS = [
     # num_channels, input_img_height, input_img_width
@@ -41,7 +41,7 @@ def test_create_lr_hr_pair(num_channels: int, input_img_height: int, input_img_w
     input_img_tensor = torch.rand(num_channels, input_img_height, input_img_width)
     scaling_factor = 2
 
-    lr_img_tensor, hr_img_tensor = create_lr_hr_pair(
+    lr_img_tensor, hr_img_tensor = create_lr_and_hr_imgs(
         input_img_tensor=input_img_tensor,
         scaling_factor=scaling_factor,
     )
@@ -150,7 +150,7 @@ def test_tiled_inference(
     lr_img_tensor = torch.rand(num_channels, input_img_height, input_img_width)
     model = DummyModel(scaling_factor=scaling_factor)
 
-    sr_img_tensor = _tiled_inference(
+    sr_img_tensor = tiled_inference(
         model=model,
         lr_img_tensor=lr_img_tensor,
         scaling_factor=scaling_factor,
@@ -180,7 +180,7 @@ def test_tiled_inference_cuda(
     lr_img_tensor = torch.rand(num_channels, input_img_height, input_img_width).to("cuda")
     model = DummyModel(scaling_factor=scaling_factor).to("cuda")
 
-    sr_img_tensor = _tiled_inference(
+    sr_img_tensor = tiled_inference(
         model=model,
         lr_img_tensor=lr_img_tensor,
         scaling_factor=scaling_factor,
